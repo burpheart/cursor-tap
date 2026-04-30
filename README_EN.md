@@ -22,26 +22,58 @@ This tool decrypts traffic into readable JSON and shows each streaming frame in 
 ### 1. Start the Proxy
 
 ```bash
-go run ./cmd/proxy
+go run ./cmd/cursor-tap start --http-parse
 ```
 
-Listens on `localhost:8080` (HTTP proxy) and `localhost:9090` (WebUI + WebSocket).
+`--http-parse` enables HTTP traffic parsing and WebSocket streaming, which the WebUI depends on.
+
+Listens on `localhost:8080` (HTTP proxy), `localhost:1080` (SOCKS5 proxy), and `localhost:9090` (API + WebSocket).
 
 ### 2. Configure Cursor
+
+Set environment variables to route Cursor through the proxy and trust the self-signed CA:
 
 ```bash
 # Windows
 set HTTP_PROXY=http://localhost:8080
 set HTTPS_PROXY=http://localhost:8080
+set http_proxy=http://localhost:8080
+set https_proxy=http://localhost:8080
 set NODE_EXTRA_CA_CERTS=C:\path\to\ca.crt
 
 # macOS/Linux
 export HTTP_PROXY=http://localhost:8080
 export HTTPS_PROXY=http://localhost:8080
-export NODE_EXTRA_CA_CERTS=/path/to/ca.crt
+export http_proxy=http://localhost:8080
+export https_proxy=http://localhost:8080
+export NODE_EXTRA_CA_CERTS=~/.cursor-tap/ca/ca.crt
 ```
 
-CA certificate is auto-generated at `~/.cursor-tap/ca.crt` on first run.
+> ⚠️ **Both uppercase and lowercase versions must be set**: Node.js prioritizes lowercase `http_proxy`/`https_proxy`; setting only the uppercase versions may not work.
+
+CA certificate is auto-generated at `~/.cursor-tap/ca/ca.crt` on first run.
+
+#### macOS Extra Step: Install CA to System Keychain
+
+Cursor is an Electron app — its network requests use the Chromium networking stack, which **ignores `NODE_EXTRA_CA_CERTS`** and only trusts the system certificate store. Install the CA to the system keychain:
+
+```bash
+sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keychain ~/.cursor-tap/ca/ca.crt
+```
+
+#### Launch Cursor from Terminal
+
+Cursor must be launched from the terminal to inherit environment variables:
+
+```bash
+# macOS
+/Applications/Cursor.app/Contents/MacOS/Cursor &
+
+# Or run in background with nohup
+nohup /Applications/Cursor.app/Contents/MacOS/Cursor > /dev/null 2>&1 &
+```
+
+> ⚠️ Using `open -a Cursor` will not inherit terminal environment variables.
 
 ### 3. Start WebUI
 
@@ -56,11 +88,13 @@ Open `http://localhost:3000`.
 ## Project Structure
 
 ```
-├── cmd/proxy/          # Proxy entry point
+├── cmd/cursor-tap/    # Proxy entry point
 ├── internal/
+│   ├── api/           # API and WebSocket service
 │   ├── ca/             # CA certificate management
-│   ├── proxy/          # HTTP CONNECT proxy
-│   └── httpstream/     # gRPC parsing core
+│   ├── httpstream/     # gRPC parsing core
+│   ├── mitm/          # MITM interceptor
+│   └── proxy/          # HTTP/SOCKS5 proxy
 ├── cursor_proto/       # Extracted proto definitions
 └── web/                # Next.js frontend
 ```
