@@ -101,18 +101,21 @@ func WithCacheSize(size int) RecorderOption {
 }
 
 // NewRecorder creates a new JSONL recorder.
+// If path is empty, no file is written (in-memory only, for WebSocket/cache use).
 func NewRecorder(path string, opts ...RecorderOption) (*Recorder, error) {
-	file, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY|os.O_SYNC, 0644)
-	if err != nil {
-		return nil, fmt.Errorf("open recorder file: %w", err)
-	}
-
 	r := &Recorder{
-		file:         file,
-		encoder:      json.NewEncoder(file),
 		logLevel:     LogLevelBasic,
 		recordCache:  make([]Record, 0, 1000),
 		maxCacheSize: 1000, // Keep last 1000 records for initial load
+	}
+
+	if path != "" {
+		file, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY|os.O_SYNC, 0644)
+		if err != nil {
+			return nil, fmt.Errorf("open recorder file: %w", err)
+		}
+		r.file = file
+		r.encoder = json.NewEncoder(file)
 	}
 
 	for _, opt := range opts {
@@ -126,17 +129,22 @@ func NewRecorder(path string, opts ...RecorderOption) (*Recorder, error) {
 func (r *Recorder) Close() error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	return r.file.Close()
+	if r.file != nil {
+		return r.file.Close()
+	}
+	return nil
 }
 
 // write writes a record to the file (thread-safe, sync write).
 func (r *Recorder) write(rec Record) error {
-	r.mu.Lock()
-	if err := r.encoder.Encode(rec); err != nil {
+	if r.encoder != nil {
+		r.mu.Lock()
+		if err := r.encoder.Encode(rec); err != nil {
+			r.mu.Unlock()
+			return err
+		}
 		r.mu.Unlock()
-		return err
 	}
-	r.mu.Unlock()
 
 	r.records.Add(1)
 
@@ -424,11 +432,12 @@ func (s *Session) Logger() *SessionLogger {
 
 // WriteTo implements io.WriterTo for streaming records.
 func (r *Recorder) WriteTo(w io.Writer) (int64, error) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-
-	// Flush and sync
-	return 0, r.file.Sync()
+	if r.file != nil {
+		r.mu.Lock()
+		defer r.mu.Unlock()
+		return 0, r.file.Sync()
+	}
+	return 0, nil
 }
 
 // GetRecentRecords returns the most recent records (for initial frontend load).
